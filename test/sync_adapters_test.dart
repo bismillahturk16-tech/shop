@@ -57,6 +57,8 @@ void main() {
     expect(reopened.get(customerKey)!.isSynced, true);
     expect(reopened.get(customerKey)!.name, 'علی');
     expect(reopened.get(customerKey)!.phone, '۰۹۱۲');
+    expect(reopened.get(customerKey)!.createdAt, customer.createdAt);
+    expect(Customer.fromMap(customer.toMap()).createdAt, customer.createdAt);
     expect(reopened.values.where((c) => !c.isSynced).isEmpty, true);
 
     await Hive.close();

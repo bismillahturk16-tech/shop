@@ -6,11 +6,15 @@ class CustomerCard extends StatelessWidget {
   final VoidCallback onLongPress;
   final VoidCallback onPress;
 
+  /// The arrow on the left edge of the card edits the customer's details.
+  final VoidCallback onEdit;
+
   const CustomerCard({
     super.key,
     required this.customer,
     required this.onLongPress,
     required this.onPress,
+    required this.onEdit,
   });
 
   @override
@@ -90,7 +94,21 @@ class CustomerCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(Icons.arrow_back_ios, size: 18),
+              Tooltip(
+                message: 'ویرایش مشخصات مشتری',
+                child: InkWell(
+                  onTap: onEdit,
+                  borderRadius: BorderRadius.circular(14),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+                    child: Icon(
+                      Icons.arrow_back_ios,
+                      size: 18,
+                      color: Color(0xFF513680),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),

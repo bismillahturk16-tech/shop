@@ -105,6 +105,35 @@ class LocalAuthStore {
   Future<void> useAccount(String email) =>
       _box.put('currentEmail', _normalize(email));
 
+  /// Returns null when the password was replaced, otherwise a Persian message.
+  Future<String?> changePassword({
+    required String email,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final key = _normalize(email);
+    final entry = _accounts[key];
+
+    if (entry is! Map) return 'با این ایمیل حسابی ثبت نشده است.';
+
+    final accounts = _accounts;
+    final record = Map<String, dynamic>.from(entry.cast<String, dynamic>());
+
+    if (_hash(currentPassword, record['salt'] as String) != record['hash']) {
+      return 'رمز عبور فعلی نادرست است.';
+    }
+
+    final saltHex = _randomHex();
+
+    record['salt'] = saltHex;
+    record['hash'] = _hash(newPassword, saltHex);
+    accounts[key] = record;
+
+    await _box.put('accounts', accounts);
+
+    return null;
+  }
+
   Future<void> clearCurrent() => _box.delete('currentEmail');
 
   String _hash(String password, String saltHex) {

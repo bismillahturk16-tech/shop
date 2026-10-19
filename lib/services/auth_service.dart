@@ -237,6 +237,49 @@ class AuthService {
     }
   }
 
+  /// Returns null on success, otherwise a Persian message to show the user.
+  /// The account has to prove itself with the old password first, which is
+  /// also what Firebase demands before it accepts a new one.
+  Future<String?> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final current = _current;
+
+    if (current == null) return 'وارد حساب خود نشده‌اید.';
+
+    if (newPassword.length < 6) {
+      return 'رمز عبور جدید باید حداقل ۶ نویسه باشد.';
+    }
+
+    if (!current.isRemote) {
+      return LocalAuthStore.instance.changePassword(
+        email: current.email,
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
+    }
+
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user == null) return 'نشست شما تمام شده است، دوباره وارد شوید.';
+
+    try {
+      await user.reauthenticateWithCredential(
+        EmailAuthProvider.credential(
+          email: user.email!,
+          password: currentPassword,
+        ),
+      );
+
+      await user.updatePassword(newPassword);
+
+      return null;
+    } on FirebaseAuthException catch (e) {
+      return _message(e);
+    }
+  }
+
   void _publish(AuthAccount? account) {
     _current = account;
     if (!_accounts.isClosed) _accounts.add(account);

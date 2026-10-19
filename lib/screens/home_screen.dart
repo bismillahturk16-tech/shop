@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:for_shop/components/app_drawer.dart';
+import 'package:for_shop/components/change_password_dialog.dart';
 import 'package:for_shop/components/customer_card.dart';
 import 'package:for_shop/components/delete_customer_dialog.dart';
 import 'package:for_shop/components/empty_customer_view.dart';
+import 'package:for_shop/db/database_helper.dart';
 import 'package:for_shop/screens/add_costomer_screen.dart';
 import 'package:for_shop/screens/customer_details_screen.dart';
 import 'package:for_shop/services/auth_service.dart';
@@ -21,6 +25,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool isSearching = false;
   String searchText = '';
   List<Customer> customers = [];
+
+  StreamSubscription<BoxEvent>? _customersSub;
+  int _customerRows = 0;
 
   final TextEditingController _searchController = TextEditingController();
 
@@ -180,14 +187,28 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirmed != true) return;
 
-    await SyncService.instance.syncNow();
+    // The wipe below is only safe once every row is in Firestore; a row that
+    // failed to upload would be gone with no copy left anywhere.
+    final flushError = await SyncService.instance.flushBeforeSignOut();
+
+    if (flushError != null) {
+      if (mounted) _showMessage(flushError);
+
+      return;
+    }
+
     await auth.signOut();
 
     SyncService.instance.scheduleSync();
   }
 
-  Future<void> deleteCustomer(int index) async {
-    final deleted = await DeleteCustomerDialog.show(
+  Future<void> _changePassword() async {
+    final changed = await ChangePasswordDialog.show(context);
+
+    if (changed && mounted) _showMessage('رمز عبور شما تغییر کرد.');
+  }
+
+  Future<void> deleteCustomer(int index) async {    final deleted = await DeleteCustomerDialog.show(
       context,
       filteredCustomers[index],
     );
@@ -195,11 +216,23 @@ class _HomeScreenState extends State<HomeScreen> {
     if (deleted && mounted) loadCustomers();
   }
 
+  /// Newest customer first. Rows restored from a cloud that predates
+  /// `createdAt` all carry 0, so they fall back to their Hive key and keep a
+  /// stable order among themselves.
   void loadCustomers() {
-    final box = Hive.box<Customer>('customers');
+    final rows = DatabaseHelper.customers.toMap().entries.toList();
+
+    rows.sort((a, b) {
+      final byCreatedAt = b.value.createdAt.compareTo(a.value.createdAt);
+
+      return byCreatedAt != 0
+          ? byCreatedAt
+          : (b.key as int).compareTo(a.key as int);
+    });
 
     setState(() {
-      customers = box.values.toList();
+      _customerRows = rows.length;
+      customers = rows.map((row) => row.value).toList();
     });
   }
 
@@ -227,10 +260,19 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     loadCustomers();
+
+    // A restore can land while the list is already on screen, and signing in
+    // now pulls the ledger without asking first.
+    _customersSub = DatabaseHelper.customers.watch().listen((_) {
+      if (DatabaseHelper.customers.length == _customerRows) return;
+
+      loadCustomers();
+    });
   }
 
   @override
   void dispose() {
+    _customersSub?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
@@ -249,6 +291,7 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: const Color(0xFFF5F7FA),
         drawer: AppDrawer(
           onRestore: _restoreFromCloud,
+          onChangePassword: _changePassword,
           onSignOut: _confirmSignOut,
         ),
         appBar: AppBar(
@@ -360,6 +403,19 @@ class _HomeScreenState extends State<HomeScreen> {
                             customer: customer,
                             onLongPress: () {
                               deleteCustomer(index);
+                            },
+                            onEdit: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => AddCustomerScreen(
+                                    existing: customer,
+                                    customerKey: customerKey,
+                                  ),
+                                ),
+                              ).then((_) {
+                                loadCustomers();
+                              });
                             },
                           );
                         },

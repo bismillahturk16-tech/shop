@@ -412,7 +412,7 @@ class _AddLoanScreenState extends State<AddLoanScreen> {
             flex: 2,
             child: _cell(
               controller: row.quantityController,
-              hint: ' ',
+              hint: '1',
               numeric: true,
             ),
           ),

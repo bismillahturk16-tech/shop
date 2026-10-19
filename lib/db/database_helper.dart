@@ -15,12 +15,19 @@ class DatabaseHelper {
   /// Keys like `customers:4` -> deletion time in milliseconds.
   static const String pendingDeletesBox = 'pending_deletes';
 
+  /// Keys like `customers:4` -> the Firestore document that row owns. A Hive
+  /// key starts over at zero once a box is cleared, so it can never double as a
+  /// document name; this box is what keeps the two in step.
+  static const String docMapBox = 'cloud_doc_ids';
+
   static const String metaBox = 'app_meta';
 
   /// Device-local accounts used while Firebase is not configured yet.
   static const String authBox = 'auth_local';
 
-  static const int _schemaVersion = 2;
+  /// Bump when a hand-written adapter changes shape: the data boxes are
+  /// rebuilt once from the cloud instead of being read with a stale layout.
+  static const int _schemaVersion = 3;
   static const String _guestDataKey = 'guestWorkedWithData';
 
   static Future<void> init() async {
@@ -33,6 +40,7 @@ class DatabaseHelper {
       await Hive.deleteBoxFromDisk(paymentsBox);
       await Hive.deleteBoxFromDisk(loansBox);
       await Hive.deleteBoxFromDisk(pendingDeletesBox);
+      await Hive.deleteBoxFromDisk(docMapBox);
       await meta.delete(_guestDataKey);
       await meta.put('schemaVersion', _schemaVersion);
     }
@@ -46,6 +54,7 @@ class DatabaseHelper {
     await Hive.openBox<Payment>(paymentsBox);
     await Hive.openBox<Loan>(loansBox);
     await Hive.openBox<int>(pendingDeletesBox);
+    await Hive.openBox<String>(docMapBox);
     await Hive.openBox<dynamic>(authBox);
   }
 
@@ -56,6 +65,8 @@ class DatabaseHelper {
   static Box<Loan> get loans => Hive.box<Loan>(loansBox);
 
   static Box<int> get pendingDeletes => Hive.box<int>(pendingDeletesBox);
+
+  static Box<String> get docIds => Hive.box<String>(docMapBox);
 
   static Box<dynamic> get meta => Hive.box<dynamic>(metaBox);
 
@@ -80,6 +91,7 @@ class DatabaseHelper {
     await payments.clear();
     await loans.clear();
     await pendingDeletes.clear();
+    await docIds.clear();
     await clearGuestData();
   }
 

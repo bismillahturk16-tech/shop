@@ -1,5 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Confirming a customer delete with the fingerprint the phone already
+         holds. Not required, so phones without a scanner keep installing. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+    <uses-permission android:name="android.permission.USE_FINGERPRINT"/>
+    <uses-feature
+        android:name="android.hardware.fingerprint"
+        android:required="false" />
     <application
         android:label="دفترچه قرضه"
         android:name="${applicationName}"

@@ -12,6 +12,7 @@ class CustomerAdapter extends TypeAdapter<Customer> {
       nickname: reader.read(),
       phone: reader.read(),
       isSynced: reader.readBool(),
+      createdAt: reader.readInt(),
     );
   }
 
@@ -21,5 +22,6 @@ class CustomerAdapter extends TypeAdapter<Customer> {
     writer.write(obj.nickname);
     writer.write(obj.phone);
     writer.writeBool(obj.isSynced);
+    writer.writeInt(obj.createdAt);
   }
 }

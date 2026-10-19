@@ -44,6 +44,31 @@ void main() {
     expect(entry['hash'], isNot('123456'));
     expect(entry['hash'].length, 64);
 
+    expect(
+      await store.changePassword(
+        email: 'ali@shop.ir',
+        currentPassword: 'nope',
+        newPassword: 'abcdef',
+      ),
+      isNotNull,
+    );
+    expect(
+      await store.changePassword(
+        email: 'ali@shop.ir',
+        currentPassword: '123456',
+        newPassword: 'abcdef',
+      ),
+      isNull,
+    );
+    expect(
+      await store.verify(email: 'ali@shop.ir', password: '123456'),
+      isNotNull,
+    );
+    expect(
+      await store.verify(email: 'ali@shop.ir', password: 'abcdef'),
+      isNull,
+    );
+
     await store.clearCurrent();
     expect(store.current, isNull);
 

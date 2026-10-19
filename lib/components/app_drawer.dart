@@ -12,10 +12,12 @@ class AppDrawer extends StatelessWidget {
   const AppDrawer({
     super.key,
     required this.onRestore,
+    required this.onChangePassword,
     required this.onSignOut,
   });
 
   final VoidCallback onRestore;
+  final VoidCallback onChangePassword;
   final VoidCallback onSignOut;
 
   static void _closeAnd(BuildContext context, VoidCallback action) {
@@ -28,9 +30,10 @@ class AppDrawer extends StatelessWidget {
     final account = AuthService.instance.account;
     final cloudReady = AuthService.instance.isCloudReady;
 
-    final canRestore =
-        cloudReady &&
-        (DatabaseHelper.hasGuestData || !DatabaseHelper.hasLocalData);
+    // Restoring is idempotent, so the tile stays available even when the
+    // device already holds rows: a pull that stopped half way has to be
+    // repeatable until it brings everything.
+    final canRestore = cloudReady;
 
     return Drawer(
       backgroundColor: const Color(0xFF513680),
@@ -55,6 +58,13 @@ class AppDrawer extends StatelessWidget {
                   title: 'بازیابی از ابر',
                   subtitle: 'ادغام اطلاعات بدون حساب با داده ابری',
                   onTap: () => _closeAnd(context, onRestore),
+                ),
+              if (account != null)
+                _DrawerTile(
+                  icon: Icons.lock_reset_rounded,
+                  title: 'تغییر رمز عبور',
+                  subtitle: 'رمز حساب خود را عوض کنید',
+                  onTap: () => _closeAnd(context, onChangePassword),
                 ),
               if (account != null)
                 _DrawerTile(

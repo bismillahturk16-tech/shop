@@ -70,10 +70,16 @@ class SyncService extends ChangeNotifier {
     _trackGuestData();
     _recountPending();
 
-    // Rows written before an account existed have no other trigger: signing in
-    // is the first moment they can reach the cloud.
-    _authSub = AuthService.instance.authStateChanges.listen((account) {
-      if (account != null) scheduleSync();
+    _authSub = AuthService.instance.authStateChanges.listen((account) async {
+      if (account == null || !AuthService.instance.isCloudReady) return;
+
+      // Pulling first is what makes pushing safe: reading the cloud tells a
+      // local row which document belongs to it, and a row that uploads without
+      // that binding can land on another row's document. Merging only ever
+      // adds, so this also tops up a restore that stopped half way.
+      await restoreFromCloud();
+
+      syncNow();
     });
 
     if (_online) syncNow();
@@ -117,6 +123,30 @@ class SyncService extends ChangeNotifier {
     return _online;
   }
 
+  /// Pushes everything still on the device and returns a Persian message when
+  /// something failed to reach Firestore. Signing out wipes the ledger, so the
+  /// caller must not wipe while this reports a problem.
+  Future<String?> flushBeforeSignOut() async {
+    _debounced?.cancel();
+
+    for (var round = 0; round < 3; round++) {
+      await _awaitIdle();
+      await syncNow();
+
+      if (_pendingCount == 0) return null;
+    }
+
+    return _lastError != null
+        ? 'ذخیره در فایربیس کامل نشد ($_lastError).'
+        : '${_fa(_pendingCount)} مورد هنوز در فایربیس ذخیره نشده است.';
+  }
+
+  Future<void> _awaitIdle() async {
+    while (_syncing) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+  }
+
   Future<void> syncNow() async {
     await _refreshConnectivity();
 
@@ -136,15 +166,23 @@ class SyncService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _pushDeletes(uid);
-      await _pushCustomers(uid);
-      await _pushPayments(uid);
-      await _pushLoans(uid);
-    } on FirebaseException catch (e) {
-      _lastError = e.code;
-    } catch (e) {
-      _lastError = e.toString();
-      _online = false;
+      // One phase failing must not strand the others: a loan that is still
+      // waiting keeps `isSynced == false` and goes out on the next round.
+      for (final phase in <Future<void> Function(String)>[
+        _pushDeletes,
+        _pushCustomers,
+        _pushPayments,
+        _pushLoans,
+      ]) {
+        try {
+          await phase(uid);
+        } on FirebaseException catch (e) {
+          _lastError ??= e.code;
+        } catch (e) {
+          _lastError ??= e.toString();
+          _online = false;
+        }
+      }
     } finally {
       _syncing = false;
       _recountPending();
@@ -166,12 +204,42 @@ class SyncService extends ChangeNotifier {
         DatabaseHelper.pendingDeletes.length;
   }
 
-  DocumentReference<Map<String, dynamic>> _doc(
-    String uid,
+  DocumentReference<Map<String, dynamic>> _doc(String uid, String docId) {
+    return FirebaseFirestore.instance.doc('users/$uid/data/$docId');
+  }
+
+  /// The document a local row owns, minting a fresh one the first time it is
+  /// asked for. Every later write reuses that name, so renumbering on the
+  /// device can never point two rows at the same document.
+  static Future<String> _docIdFor(String boxName, Object localKey) async {
+    final bindingKey = DatabaseHelper.deleteKey(boxName, localKey);
+
+    final bound = DatabaseHelper.docIds.get(bindingKey);
+    if (bound != null) return bound;
+
+    final taken = DatabaseHelper.docIds.values.toSet();
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+
+    var docId = '$boxName-$stamp';
+    for (var n = 1; taken.contains(docId); n++) {
+      docId = '$boxName-${stamp}_$n';
+    }
+
+    await DatabaseHelper.docIds.put(bindingKey, docId);
+
+    return docId;
+  }
+
+  static Future<void> _bind(
     String boxName,
     Object localKey,
-  ) {
-    return FirebaseFirestore.instance.doc('users/$uid/data/$boxName-$localKey');
+    String docId,
+  ) async {
+    final bindingKey = DatabaseHelper.deleteKey(boxName, localKey);
+
+    if (DatabaseHelper.docIds.get(bindingKey) == docId) return;
+
+    await DatabaseHelper.docIds.put(bindingKey, docId);
   }
 
   Future<void> _pushDeletes(String uid) async {
@@ -186,22 +254,25 @@ class SyncService extends ChangeNotifier {
       final boxName = tombstone.substring(0, separator);
       final localKey = tombstone.substring(separator + 1);
 
-      await _doc(uid, boxName, localKey).delete();
+      // A row that never got a binding was uploaded by the build that named
+      // documents after local keys, which is exactly `boxName-localKey`.
+      final docId =
+          DatabaseHelper.docIds.get(tombstone) ?? '$boxName-$localKey';
+
+      await _doc(uid, docId).delete();
+      await DatabaseHelper.docIds.delete(tombstone);
       await DatabaseHelper.pendingDeletes.delete(tombstone);
     }
   }
 
   Future<void> _pushCustomers(String uid) async {
     final box = DatabaseHelper.customers;
-    final targets = box.keys
-        .where((key) => box.get(key)?.isSynced == false)
-        .toList();
 
     await _upload(
       uid: uid,
-      boxName: 'customers',
+      boxName: DatabaseHelper.customersBox,
+      targets: _unsyncedKeys(box),
       payloadFor: (key) => box.get(key)!.toMap(),
-      targets: targets,
       onUploaded: (key) {
         final customer = box.get(key);
         if (customer != null) {
@@ -214,15 +285,18 @@ class SyncService extends ChangeNotifier {
 
   Future<void> _pushPayments(String uid) async {
     final box = DatabaseHelper.payments;
-    final targets = box.keys
-        .where((key) => box.get(key)?.isSynced == false)
-        .toList();
 
     await _upload(
       uid: uid,
-      boxName: 'payments',
-      payloadFor: (key) => box.get(key)!.toMap(),
-      targets: targets,
+      boxName: DatabaseHelper.paymentsBox,
+      targets: _unsyncedKeys(box),
+      payloadFor: (key) async => {
+        ...box.get(key)!.toMap(),
+        'customerDocId': await _docIdFor(
+          DatabaseHelper.customersBox,
+          box.get(key)!.customerKey,
+        ),
+      },
       onUploaded: (key) {
         final payment = box.get(key);
         if (payment != null) {
@@ -235,15 +309,18 @@ class SyncService extends ChangeNotifier {
 
   Future<void> _pushLoans(String uid) async {
     final box = DatabaseHelper.loans;
-    final targets = box.keys
-        .where((key) => box.get(key)?.isSynced == false)
-        .toList();
 
     await _upload(
       uid: uid,
-      boxName: 'loans',
-      payloadFor: (key) => box.get(key)!.toMap(),
-      targets: targets,
+      boxName: DatabaseHelper.loansBox,
+      targets: _unsyncedKeys(box),
+      payloadFor: (key) async => {
+        ...box.get(key)!.toMap(),
+        'customerDocId': await _docIdFor(
+          DatabaseHelper.customersBox,
+          box.get(key)!.customerKey,
+        ),
+      },
       onUploaded: (key) {
         final loan = box.get(key);
         if (loan != null) {
@@ -254,11 +331,15 @@ class SyncService extends ChangeNotifier {
     );
   }
 
+  static List<dynamic> _unsyncedKeys<T>(Box<T> box) => box.keys
+      .where((key) => (box.get(key) as dynamic)?.isSynced == false)
+      .toList();
+
   Future<void> _upload({
     required String uid,
     required String boxName,
     required List<dynamic> targets,
-    required Map<String, dynamic> Function(dynamic key) payloadFor,
+    required FutureOr<Map<String, dynamic>> Function(dynamic key) payloadFor,
     required void Function(dynamic key) onUploaded,
   }) async {
     if (targets.isEmpty) return;
@@ -273,8 +354,8 @@ class SyncService extends ChangeNotifier {
 
       for (final key in chunk) {
         batch.set(
-          _doc(uid, boxName, '$key'),
-          payloadFor(key),
+          _doc(uid, await _docIdFor(boxName, key)),
+          await payloadFor(key),
           SetOptions(merge: true),
         );
       }
@@ -288,8 +369,13 @@ class SyncService extends ChangeNotifier {
   }
 
   /// Pulls `users/{uid}/data/*` into Hive, merging with what is already on the
-  /// device. Hive keys differ per device, so customer references inside loans
-  /// and payments are remapped through [RestoreReport.customerKeys].
+  /// device.
+  ///
+  /// Every row is bound to the document it came from. The key a document was
+  /// uploaded under belongs to the device that wrote it, so a restored row takes
+  /// the next free key here and remembers which document is its own; that is what
+  /// keeps a later edit from landing on the document of whichever row happened to
+  /// carry the same number.
   static Future<RestoreReport> mergeCloudData(
     Map<String, Map<String, dynamic>> rows,
   ) async {
@@ -297,94 +383,143 @@ class SyncService extends ChangeNotifier {
     final loanBox = DatabaseHelper.loans;
     final paymentBox = DatabaseHelper.payments;
 
-    final customerKeys = <int, int>{};
-    var customers = 0, loans = 0, payments = 0, skipped = 0;
+    final cloudCustomers = <String, Map<String, dynamic>>{};
+    final cloudLoans = <String, Map<String, dynamic>>{};
+    final cloudPayments = <String, Map<String, dynamic>>{};
 
     for (final row in rows.entries) {
-      final parsed = _splitDocId(row.key);
-
-      if (parsed.$1 != 'customers') continue;
-
-      final remote = Customer.fromMap(row.value);
-      final existing = _findCustomer(remote);
-
-      if (existing != null) {
-        customerKeys[parsed.$2] = existing;
-        skipped++;
-        continue;
+      switch (_boxNameOf(row.key)) {
+        case DatabaseHelper.customersBox:
+          cloudCustomers[row.key] = row.value;
+        case DatabaseHelper.loansBox:
+          cloudLoans[row.key] = row.value;
+        case DatabaseHelper.paymentsBox:
+          cloudPayments[row.key] = row.value;
+        default:
+          break;
       }
+    }
 
-      final newKey = await customerBox.add(
-        Customer(
+    var customers = 0, loans = 0, payments = 0, skipped = 0, orphans = 0;
+
+    // A loan or payment points at its customer by document id. Documents
+    // written before that was stored carry the local key instead, which is the
+    // number in the customer document's own name.
+    final localKeyOfCustomerDoc = <String, int>{};
+    final localKeyOfLegacyCustomer = <int, int>{};
+
+    final knownCustomers = _CustomerIndex(customerBox);
+
+    for (final entry in cloudCustomers.entries) {
+      final remote = Customer.fromMap(entry.value);
+      final alreadyLocal = knownCustomers.find(remote);
+
+      final int localKey;
+
+      if (alreadyLocal != null) {
+        localKey = alreadyLocal;
+        skipped++;
+      } else {
+        final restored = Customer(
           name: remote.name,
           nickname: remote.nickname,
           phone: remote.phone,
+          createdAt: remote.createdAt,
           isSynced: true,
-        ),
-      );
+        );
 
-      customerKeys[parsed.$2] = newKey;
-      customers++;
+        localKey = await customerBox.add(restored);
+
+        knownCustomers.add(restored, localKey);
+        customers++;
+      }
+
+      await _bind(DatabaseHelper.customersBox, localKey, entry.key);
+
+      localKeyOfCustomerDoc[entry.key] = localKey;
+
+      final legacyKey = _legacyKeyOf(entry.key);
+      if (legacyKey != null) localKeyOfLegacyCustomer[legacyKey] = localKey;
     }
 
-    for (final row in rows.entries) {
-      final parsed = _splitDocId(row.key);
+    final knownLoans = _LoanIndex(loanBox);
 
-      if (parsed.$1 != 'loans') continue;
+    for (final entry in cloudLoans.entries) {
+      final remote = Loan.fromMap(entry.value);
+      final parentKey = _customerKeyOf(
+        entry.value,
+        localKeyOfCustomerDoc,
+        localKeyOfLegacyCustomer,
+      );
 
-      final remote = Loan.fromMap(row.value);
-      final mappedKey = customerKeys[remote.customerKey];
-
-      if (mappedKey == null) {
-        skipped++;
+      if (parentKey == null) {
+        orphans++;
         continue;
       }
 
-      final merged = Loan(
-        customerKey: mappedKey,
+      final restored = Loan(
+        customerKey: parentKey,
         title: remote.title,
         items: remote.items,
         dateTime: remote.dateTime,
         isSynced: true,
       );
 
-      if (_findLoan(merged) != null) {
+      final alreadyLocal = knownLoans.find(restored);
+
+      final int localKey;
+
+      if (alreadyLocal != null) {
+        localKey = alreadyLocal;
         skipped++;
-        continue;
+      } else {
+        localKey = await loanBox.add(restored);
+
+        knownLoans.add(restored, localKey);
+        loans++;
       }
 
-      await loanBox.add(merged);
-      loans++;
+      await _bind(DatabaseHelper.loansBox, localKey, entry.key);
     }
 
-    for (final row in rows.entries) {
-      final parsed = _splitDocId(row.key);
+    final knownPayments = _PaymentIndex(paymentBox);
 
-      if (parsed.$1 != 'payments') continue;
+    for (final entry in cloudPayments.entries) {
+      final remote = Payment.fromMap(entry.value);
+      final parentKey = _customerKeyOf(
+        entry.value,
+        localKeyOfCustomerDoc,
+        localKeyOfLegacyCustomer,
+      );
 
-      final remote = Payment.fromMap(row.value);
-      final mappedKey = customerKeys[remote.customerKey];
-
-      if (mappedKey == null) {
-        skipped++;
+      if (parentKey == null) {
+        orphans++;
         continue;
       }
 
-      final merged = Payment(
-        customerKey: mappedKey,
+      final restored = Payment(
+        customerKey: parentKey,
         amount: remote.amount,
         description: remote.description,
         dateTime: remote.dateTime,
         isSynced: true,
       );
 
-      if (_findPayment(merged) != null) {
+      final alreadyLocal = knownPayments.find(restored);
+
+      final int localKey;
+
+      if (alreadyLocal != null) {
+        localKey = alreadyLocal;
         skipped++;
-        continue;
+      } else {
+        localKey = await paymentBox.add(restored);
+
+        knownPayments.add(restored, localKey);
+        payments++;
       }
 
-      await paymentBox.add(merged);
-      payments++;
+      await _bind(DatabaseHelper.paymentsBox, localKey, entry.key);
     }
 
     return RestoreReport(
@@ -392,53 +527,65 @@ class SyncService extends ChangeNotifier {
       loans: loans,
       payments: payments,
       skipped: skipped,
-      customerKeys: customerKeys,
+      orphans: orphans,
+      requeued: await _requeueUnbound(),
     );
   }
 
-  static (String, int) _splitDocId(String docId) {
-    final separator = docId.indexOf('-');
+  /// Document ids look like `loans-37`; the part before the last dash names the
+  /// box the row came from.
+  static String? _boxNameOf(String docId) {
+    final separator = docId.lastIndexOf('-');
 
-    return (
-      docId.substring(0, separator),
-      int.tryParse(docId.substring(separator + 1)) ?? -1,
-    );
+    return separator <= 0 ? null : docId.substring(0, separator);
   }
 
-  static int? _findCustomer(Customer candidate) {
-    final box = DatabaseHelper.customers;
+  /// The key the uploading device handed out, which only documents named by the
+  /// build that used that key as a document name still carry.
+  static int? _legacyKeyOf(String docId) =>
+      int.tryParse(docId.substring(docId.lastIndexOf('-') + 1));
 
-    for (final key in box.keys) {
-      final local = box.get(key);
+  static int? _customerKeyOf(
+    Map<String, dynamic> payload,
+    Map<String, int> localKeyOfCustomerDoc,
+    Map<int, int> localKeyOfLegacyCustomer,
+  ) {
+    final docId = payload['customerDocId'];
 
-      if (local != null && local.sameContent(candidate)) return key as int;
-    }
+    if (docId is String) return localKeyOfCustomerDoc[docId];
 
-    return null;
+    final legacy = payload['customerKey'];
+
+    return legacy is num ? localKeyOfLegacyCustomer[legacy.toInt()] : null;
   }
 
-  static int? _findLoan(Loan candidate) {
-    final box = DatabaseHelper.loans;
+  /// Rows an older build marked as synced although no document ever held them:
+  /// they were written over another row's document and exist nowhere. Sending
+  /// them again is what lets «همگام» mean the data really is in Firestore.
+  static Future<int> _requeueUnbound() async {
+    final bound = DatabaseHelper.docIds.keys.cast<String>().toSet();
 
-    for (final key in box.keys) {
-      final local = box.get(key);
+    var requeued = 0;
 
-      if (local != null && local.sameContent(candidate)) return key as int;
+    Future<void> requeue<T>(String boxName, Box<T> box) async {
+      for (final key in box.keys) {
+        final row = box.get(key);
+
+        if (row == null || !(row as dynamic).isSynced) continue;
+        if (bound.contains(DatabaseHelper.deleteKey(boxName, key))) continue;
+
+        (row as dynamic).isSynced = false;
+
+        await box.put(key, row);
+        requeued++;
+      }
     }
 
-    return null;
-  }
+    await requeue(DatabaseHelper.customersBox, DatabaseHelper.customers);
+    await requeue(DatabaseHelper.loansBox, DatabaseHelper.loans);
+    await requeue(DatabaseHelper.paymentsBox, DatabaseHelper.payments);
 
-  static int? _findPayment(Payment candidate) {
-    final box = DatabaseHelper.payments;
-
-    for (final key in box.keys) {
-      final local = box.get(key);
-
-      if (local != null && local.sameContent(candidate)) return key as int;
-    }
-
-    return null;
+    return requeued;
   }
 
   /// Returns a Persian message describing what was restored.
@@ -447,11 +594,7 @@ class SyncService extends ChangeNotifier {
       return 'برای بازیابی باید با حساب خود وارد شوید.';
     }
 
-    if (DatabaseHelper.hasLocalData && !DatabaseHelper.hasGuestData) {
-      return 'داده‌های روی این گوشی متعلق به همین حساب است و ادغام لازم نیست.';
-    }
-
-    if (_syncing) return 'یک عملیات دیگر در حال انجام است؛ کمی بعد تلاش کنید.';
+    if (_syncing) await _awaitIdle();
 
     final uid = AuthService.instance.uid!;
 
@@ -479,12 +622,26 @@ class SyncService extends ChangeNotifier {
       ];
 
       if (parts.isEmpty) {
-        return report.skipped == 0
+        // Rows that claimed to be synced while owning no document are back in
+        // the queue, which is not the same as having nothing to do.
+        return report.requeued > 0
+            ? '${_fa(report.requeued)} مورد دوباره به صف ذخیره رفت.'
+            : rows.isEmpty
             ? 'داده‌ای در کلَود پیدا نشد.'
             : 'همه داده‌ها از قبل روی این تلفن بود.';
       }
 
-      return 'بازیابی شد: ${parts.join('، ')}.';
+      var message = 'بازیابی شد: ${parts.join('، ')}.';
+
+      if (report.orphans > 0) {
+        message += ' ${_fa(report.orphans)} مورد مشتری‌شان در کلَود نبود.';
+      }
+
+      if (report.requeued > 0) {
+        message += ' ${_fa(report.requeued)} مورد دوباره به صف ذخیره رفت.';
+      }
+
+      return message;
     } on FirebaseException catch (e) {
       _lastError = e.code;
 
@@ -508,19 +665,111 @@ class SyncService extends ChangeNotifier {
       });
 }
 
+/// Rows are matched by content so a second restore of the same document does
+/// not duplicate it. A customer saved before `createdAt` existed carries 0 and
+/// is therefore compared on name, nickname and phone alone.
+class _CustomerIndex {
+  _CustomerIndex(Box<Customer> box) {
+    for (final key in box.keys) {
+      add(box.get(key), key as int);
+    }
+  }
+
+  final _withTime = <String, int>{};
+  final _withoutTime = <String, int>{};
+
+  static String _fingerprint(
+    Customer customer, {
+    required bool withTime,
+  }) =>
+      withTime
+          ? '${customer.name}\u0000${customer.nickname}\u0000'
+            '${customer.phone}\u0000${customer.createdAt}'
+          : '${customer.name}\u0000${customer.nickname}\u0000${customer.phone}';
+
+  void add(Customer? customer, int key) {
+    if (customer == null) return;
+
+    _withTime[_fingerprint(customer, withTime: true)] = key;
+    _withoutTime[_fingerprint(customer, withTime: false)] = key;
+  }
+
+  int? find(Customer customer) => customer.createdAt == 0
+      ? _withoutTime[_fingerprint(customer, withTime: false)]
+      : _withTime[_fingerprint(customer, withTime: true)];
+}
+
+class _LoanIndex {
+  _LoanIndex(Box<Loan> box) {
+    for (final key in box.keys) {
+      add(box.get(key), key as int);
+    }
+  }
+
+  final _keys = <String, int>{};
+
+  static String _fingerprint(Loan loan) => [
+    loan.customerKey,
+    loan.title,
+    loan.dateTime.millisecondsSinceEpoch,
+    for (final item in loan.items)
+      '${item.name}:${item.unitPrice}:${item.quantity}',
+  ].join('\u0000');
+
+  void add(Loan? loan, int key) {
+    if (loan == null) return;
+
+    _keys[_fingerprint(loan)] = key;
+  }
+
+  int? find(Loan loan) => _keys[_fingerprint(loan)];
+}
+
+class _PaymentIndex {
+  _PaymentIndex(Box<Payment> box) {
+    for (final key in box.keys) {
+      add(box.get(key), key as int);
+    }
+  }
+
+  final _keys = <String, int>{};
+
+  static String _fingerprint(Payment payment) => [
+    payment.customerKey,
+    payment.amount,
+    payment.description,
+    payment.dateTime.millisecondsSinceEpoch,
+  ].join('\u0000');
+
+  void add(Payment? payment, int key) {
+    if (payment == null) return;
+
+    _keys[_fingerprint(payment)] = key;
+  }
+
+  int? find(Payment payment) => _keys[_fingerprint(payment)];
+}
+
 class RestoreReport {
   const RestoreReport({
     required this.customers,
     required this.loans,
     required this.payments,
     required this.skipped,
-    required this.customerKeys,
+    required this.orphans,
+    required this.requeued,
   });
 
   final int customers;
   final int loans;
   final int payments;
+
+  /// Rows that were already on the device under the same content.
   final int skipped;
 
-  final Map<int, int> customerKeys;
+  /// Loans and payments whose customer document is missing from the cloud.
+  final int orphans;
+
+  /// Rows that were marked as synced although no document held them.
+  final int requeued;
 }
