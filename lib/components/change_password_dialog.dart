@@ -3,8 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:for_shop/components/auth_text_field.dart';
 import 'package:for_shop/services/auth_service.dart';
 
-/// Changing the account password. The old password is verified by the auth
-/// provider itself, and nothing is ever kept on the device.
 class ChangePasswordDialog extends StatefulWidget {
   const ChangePasswordDialog({super.key});
 
@@ -108,8 +106,8 @@ class _ChangePasswordDialogState extends State<ChangePasswordDialog> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Text(
-                  'رمز عبور حساب خود را عوض کنید. تا زمانی که رمز جدید را '
-                  'وارد نکرده‌اید، تغییری اعمال نمی‌شود.',
+                  'برای تغییر رمز عبور ابتدا رمز فعلی را وارد کنید. '
+                  'رمز عبور تان را به خاطر بسپارید.',
                   style: TextStyle(fontSize: 13, height: 1.8),
                 ),
                 const SizedBox(height: 16),

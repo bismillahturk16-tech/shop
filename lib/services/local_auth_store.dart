@@ -102,9 +102,6 @@ class LocalAuthStore {
     return null;
   }
 
-  Future<void> useAccount(String email) =>
-      _box.put('currentEmail', _normalize(email));
-
   /// Returns null when the password was replaced, otherwise a Persian message.
   Future<String?> changePassword({
     required String email,

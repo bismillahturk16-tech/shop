@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:for_shop/components/identity_confirmation.dart';
 import 'package:for_shop/db/database_helper.dart';
 import 'package:for_shop/models/customer.dart';
 import 'package:hive/hive.dart';
@@ -53,6 +54,18 @@ class _AddCustomerScreenState extends State<AddCustomerScreen> {
     }
 
     final previous = widget.existing;
+
+    if (previous != null) {
+      // Changing a customer that is already in the ledger needs the same proof
+      // of identity as deleting one.
+      final confirmed = await ConfirmIdentityDialog.show(
+        context,
+        action: 'ویرایش',
+        name: previous.name,
+      );
+
+      if (!confirmed || !mounted) return;
+    }
 
     final customer = Customer(
       name: nameController.text.trim(),

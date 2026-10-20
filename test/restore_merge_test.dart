@@ -105,35 +105,38 @@ void main() {
     expect(DatabaseHelper.customers.length, before);
   });
 
-  test('a restored row keeps its document even when the numbering differs', () async {
-    // Hive starts counting at zero again once a box is cleared, so a document
-    // named after the key of the device that wrote it can land on an unrelated
-    // row here. The binding, not the key, decides where an edit is pushed.
-    final gapped = <String, Map<String, dynamic>>{
-      'customers-0': {'name': 'A', 'nickname': null, 'phone': null},
-      'customers-1': {'name': 'B', 'nickname': null, 'phone': null},
-      'customers-3': {'name': 'C', 'nickname': null, 'phone': null},
-    };
+  test(
+    'a restored row keeps its document even when the numbering differs',
+    () async {
+      // Hive starts counting at zero again once a box is cleared, so a document
+      // named after the key of the device that wrote it can land on an unrelated
+      // row here. The binding, not the key, decides where an edit is pushed.
+      final gapped = <String, Map<String, dynamic>>{
+        'customers-0': {'name': 'A', 'nickname': null, 'phone': null},
+        'customers-1': {'name': 'B', 'nickname': null, 'phone': null},
+        'customers-3': {'name': 'C', 'nickname': null, 'phone': null},
+      };
 
-    await clearBoxes();
+      await clearBoxes();
 
-    final report = await SyncService.mergeCloudData(gapped);
+      final report = await SyncService.mergeCloudData(gapped);
 
-    expect(report.customers, 3);
-    expect(report.requeued, 0);
-    expect(
-      DatabaseHelper.docIds.values.toSet(),
-      containsAll(<String>['customers-0', 'customers-1', 'customers-3']),
-    );
+      expect(report.customers, 3);
+      expect(report.requeued, 0);
+      expect(
+        DatabaseHelper.docIds.values.toSet(),
+        containsAll(<String>['customers-0', 'customers-1', 'customers-3']),
+      );
 
-    final fresh = await DatabaseHelper.customers.add(
-      Customer(name: 'New in town'),
-    );
+      final fresh = await DatabaseHelper.customers.add(
+        Customer(name: 'New in town'),
+      );
 
-    // A row that never reached Firestore has no document yet, so it cannot be
-    // written over the one of a row that has.
-    expect(documentOf('customers', fresh), isNull);
-  });
+      // A row that never reached Firestore has no document yet, so it cannot be
+      // written over the one of a row that has.
+      expect(documentOf('customers', fresh), isNull);
+    },
+  );
 
   test('customers sharing a name and phone stay separate', () async {
     await clearBoxes();
@@ -188,20 +191,23 @@ void main() {
     );
   });
 
-  test('a row marked synced without a document goes back into the queue', () async {
-    await clearBoxes();
+  test(
+    'a row marked synced without a document goes back into the queue',
+    () async {
+      await clearBoxes();
 
-    // Written by the build that could push two rows onto the same document: the
-    // flag says it is safe, Firestore has never heard of it.
-    final ghost = await DatabaseHelper.customers.add(
-      Customer(name: 'Gone missing', isSynced: true),
-    );
+      // Written by the build that could push two rows onto the same document: the
+      // flag says it is safe, Firestore has never heard of it.
+      final ghost = await DatabaseHelper.customers.add(
+        Customer(name: 'Gone missing', isSynced: true),
+      );
 
-    final report = await SyncService.mergeCloudData({});
+      final report = await SyncService.mergeCloudData({});
 
-    expect(report.requeued, 1);
-    expect(DatabaseHelper.customers.get(ghost)!.isSynced, false);
-  });
+      expect(report.requeued, 1);
+      expect(DatabaseHelper.customers.get(ghost)!.isSynced, false);
+    },
+  );
 
   test('loans whose customer is missing are reported as orphans', () async {
     await clearBoxes();

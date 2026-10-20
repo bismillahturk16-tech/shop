@@ -8,7 +8,6 @@ class SyncStatusBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final account = AuthService.instance.account;
     final cloudReady = AuthService.instance.isCloudReady;
 
     return ListenableBuilder(
@@ -16,11 +15,16 @@ class SyncStatusBar extends StatelessWidget {
       builder: (context, child) {
         final sync = SyncService.instance;
 
+        // Nothing is confirmed by the phone alone: «همگام» appears only once
+        // Firestore has answered, so a Wi-Fi with no internet behind it shows
+        // as unverified instead of a healthy green.
         final color = !cloudReady
             ? const Color(0xFF667781)
             : sync.isSyncing
             ? const Color(0xFF513680)
             : !sync.isOnline
+            ? Colors.orange.shade700
+            : !sync.isCloudVerified
             ? Colors.orange.shade700
             : sync.pendingCount > 0
             ? Colors.amber.shade700
@@ -32,14 +36,18 @@ class SyncStatusBar extends StatelessWidget {
             ? Icons.sync_rounded
             : !sync.isOnline
             ? Icons.wifi_off_rounded
+            : !sync.isCloudVerified
+            ? Icons.cloud_off_rounded
             : sync.pendingCount > 0
             ? Icons.cloud_upload_rounded
             : Icons.cloud_done_rounded;
 
+        final account = AuthService.instance.account;
+
         final label = account == null
             ? 'بدون حساب — همگام‌سازی ابری غیرفعال'
             : !cloudReady
-            ? 'حساب محلی روی این گوشی؛'
+            ? 'حساب محلی روی این گوشی'
             : sync.lastError != null
             ? 'خطا در همگام‌سازی (${sync.lastError})'
             : sync.statusLabel;
@@ -68,7 +76,7 @@ class SyncStatusBar extends StatelessWidget {
               if (cloudReady)
                 IconButton(
                   tooltip: 'همگام‌سازی الآن',
-                  onPressed: sync.isSyncing ? null : sync.syncNow,
+                  onPressed: sync.isSyncing ? null : sync.refresh,
                   icon: Icon(Icons.refresh_rounded, size: 20, color: color),
                 ),
             ],

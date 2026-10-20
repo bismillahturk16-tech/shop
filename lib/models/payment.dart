@@ -29,10 +29,4 @@ class Payment {
       (map['dateTime'] as num).toInt(),
     ),
   );
-
-  bool sameContent(Payment other) =>
-      customerKey == other.customerKey &&
-      amount == other.amount &&
-      description == other.description &&
-      dateTime == other.dateTime;
 }

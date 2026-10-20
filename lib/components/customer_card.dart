@@ -102,7 +102,7 @@ class CustomerCard extends StatelessWidget {
                   child: const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 10, vertical: 14),
                     child: Icon(
-                      Icons.arrow_back_ios,
+                      Icons.mode_edit,
                       size: 18,
                       color: Color(0xFF513680),
                     ),

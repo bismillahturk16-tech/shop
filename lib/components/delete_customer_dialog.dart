@@ -1,24 +1,35 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
-import 'package:local_auth/local_auth.dart';
 
+import 'package:for_shop/components/identity_confirmation.dart';
 import 'package:for_shop/db/database_helper.dart';
 import 'package:for_shop/models/customer.dart';
 import 'package:for_shop/services/auth_service.dart';
 
 /// Deleting a customer is the one irreversible action in the ledger, so the
-/// warning and the proof of identity live in the same dialog: either the
-/// account password, or the fingerprint the phone itself already holds.
+/// warning and the proof of identity live in the same dialog.
 class DeleteCustomerDialog extends StatefulWidget {
-  const DeleteCustomerDialog({super.key, required this.customer});
+  const DeleteCustomerDialog({
+    super.key,
+    required this.customer,
+    required this.customerKey,
+  });
 
   final Customer customer;
 
-  static Future<bool> show(BuildContext context, Customer customer) async {
+  /// The Hive key of [customer]: rows are not comparable, so the delete has to
+  /// be told which one it is about.
+  final Object customerKey;
+
+  static Future<bool> show(
+    BuildContext context,
+    Customer customer,
+    Object customerKey,
+  ) async {
     final deleted = await showDialog<bool>(
       context: context,
-      builder: (context) => DeleteCustomerDialog(customer: customer),
+      builder: (context) =>
+          DeleteCustomerDialog(customer: customer, customerKey: customerKey),
     );
 
     return deleted == true;
@@ -29,125 +40,21 @@ class DeleteCustomerDialog extends StatefulWidget {
 }
 
 class _DeleteCustomerDialogState extends State<DeleteCustomerDialog> {
-  final TextEditingController _passwordController = TextEditingController();
-  final LocalAuthentication _localAuth = LocalAuthentication();
+  final GlobalKey<IdentityConfirmationState> _identity =
+      GlobalKey<IdentityConfirmationState>();
 
-  String? _error;
-  String? _biometricError;
   bool _busy = false;
-  bool _canUseBiometrics = false;
 
-  bool get _needsPassword => AuthService.instance.account != null;
-
-  @override
-  void initState() {
-    super.initState();
-
-    if (_needsPassword) _checkBiometrics();
-  }
-
-  @override
-  void dispose() {
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  /// The button is only offered when the phone has a fingerprint enrolled, so
-  /// nobody is sent to a prompt they cannot complete. `getAvailableBiometrics`
-  /// is deliberately not consulted: it reports an empty list on some Samsung
-  /// devices even though the sensor is present and enrolled.
-  Future<void> _checkBiometrics() async {
-    var ready = false;
-
-    try {
-      ready =
-          await _localAuth.canCheckBiometrics ||
-          await _localAuth.isDeviceSupported();
-    } on PlatformException {
-      ready = false;
-    }
-
-    if (mounted) setState(() => _canUseBiometrics = ready);
-  }
-
-  Future<void> _deleteWithPassword() async {
-    if (_busy) return;
-
-    setState(() {
-      _busy = true;
-      _error = null;
-      _biometricError = null;
-    });
-
-    String? error;
-
-    if (_needsPassword) {
-      error = await AuthService.instance.confirmPassword(
-        _passwordController.text,
-      );
-    }
-
-    if (error != null) {
-      if (!mounted) return;
-
-      setState(() {
-        _busy = false;
-        _error = error;
-      });
-
-      return;
-    }
-
-    await _removeCustomer();
-  }
-
-  Future<void> _deleteWithBiometric() async {
-    if (_busy) return;
-
-    setState(() {
-      _busy = true;
-      _error = null;
-      _biometricError = null;
-    });
-
-    var verified = false;
-    var failed = false;
-
-    try {
-      verified = await _localAuth.authenticate(
-        localizedReason:
-            'برای حذف «${widget.customer.name}» اثر انگشت خود را تایید کنید',
-        biometricOnly: true,
-      );
-    } on PlatformException {
-      failed = true;
-    }
-
-    if (!mounted) return;
-
-    if (!verified) {
-      setState(() {
-        _busy = false;
-        _biometricError = failed
-            ? 'اثر انگشت روی این گوشی در دسترس نیست.'
-            : 'تایید با اثر انگشت انجام نشد.';
-      });
-
-      return;
-    }
-
-    await _removeCustomer();
-  }
+  bool get _needsIdentity => AuthService.instance.account != null;
 
   Future<void> _removeCustomer() async {
-    final box = Hive.box<Customer>(DatabaseHelper.customersBox);
-    final key = box.keys.firstWhere((key) => box.get(key) == widget.customer);
+    final key = widget.customerKey;
 
     await _deleteChildRows(DatabaseHelper.loans, key);
     await _deleteChildRows(DatabaseHelper.payments, key);
 
     await DatabaseHelper.markDeleted(DatabaseHelper.customersBox, key);
-    await box.delete(key);
+    await DatabaseHelper.customers.delete(key);
 
     if (mounted) Navigator.pop(context, true);
   }
@@ -159,9 +66,7 @@ class _DeleteCustomerDialogState extends State<DeleteCustomerDialog> {
     final keys = box
         .toMap()
         .entries
-        .where(
-          (entry) => (entry.value as dynamic).customerKey == customerKey,
-        )
+        .where((entry) => (entry.value as dynamic).customerKey == customerKey)
         .map((entry) => entry.key)
         .toList();
 
@@ -205,52 +110,16 @@ class _DeleteCustomerDialogState extends State<DeleteCustomerDialog> {
               'این کار قابل بازگشت نیست.',
               style: const TextStyle(fontSize: 15, height: 1.8),
             ),
-            if (_needsPassword) ...[
+            if (_needsIdentity) ...[
               const SizedBox(height: 16),
-              Text(
-                _canUseBiometrics
-                    ? 'برای تایید، رمز عبور خود را وارد کنید یا اثر انگشت بگذارید.'
-                    : 'برای تایید، رمز عبور حساب خود را وارد کنید.',
-                style: const TextStyle(fontSize: 13, color: Color(0xFF667781)),
+              IdentityConfirmation(
+                key: _identity,
+                action: 'حذف',
+                name: name,
+                accent: Colors.red.shade700,
+                onBusyChanged: (busy) => setState(() => _busy = busy),
+                onVerified: _removeCustomer,
               ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: _passwordController,
-                obscureText: true,
-                enabled: !_busy,
-                autofocus: true,
-                decoration: InputDecoration(
-                  labelText: 'رمز عبور',
-                  errorText: _error,
-                  border: const OutlineInputBorder(),
-                ),
-              ),
-              if (_canUseBiometrics) ...[
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _deleteWithBiometric,
-                  icon: const Icon(Icons.fingerprint_rounded, size: 26),
-                  label: const Text('حذف با اثر انگشت'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.red.shade700,
-                    side: BorderSide(color: Colors.red.shade200),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-                if (_biometricError != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    _biometricError!,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      color: Colors.red.shade700,
-                    ),
-                  ),
-                ],
-              ],
             ],
           ],
         ),
@@ -260,7 +129,13 @@ class _DeleteCustomerDialogState extends State<DeleteCustomerDialog> {
             child: const Text('لغو'),
           ),
           ElevatedButton(
-            onPressed: _busy ? null : _deleteWithPassword,
+            // With no account the button deletes straight away, which is what
+            // the guest ledger on an unconfigured phone has always done.
+            onPressed: _busy
+                ? null
+                : _needsIdentity
+                ? () => _identity.currentState?.confirmWithPassword()
+                : _removeCustomer,
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red.shade700,
               foregroundColor: Colors.white,

@@ -38,21 +38,6 @@ class Loan {
         LoanItem.fromMap(Map<String, dynamic>.from(raw as Map)),
     ],
   );
-
-  bool sameContent(Loan other) {
-    if (customerKey != other.customerKey ||
-        title != other.title ||
-        dateTime != other.dateTime ||
-        items.length != other.items.length) {
-      return false;
-    }
-
-    for (var i = 0; i < items.length; i++) {
-      if (!items[i].sameContent(other.items[i])) return false;
-    }
-
-    return true;
-  }
 }
 
 class LoanItem {
@@ -84,9 +69,4 @@ class LoanItem {
         0,
     quantity: (map['quantity'] as num?)?.toDouble() ?? 1,
   );
-
-  bool sameContent(LoanItem other) =>
-      name == other.name &&
-      unitPrice == other.unitPrice &&
-      quantity == other.quantity;
 }

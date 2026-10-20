@@ -33,9 +33,4 @@ class Customer {
     phone: map['phone'] as String?,
     createdAt: (map['createdAt'] as num?)?.toInt() ?? 0,
   );
-
-  bool sameContent(Customer other) =>
-      name == other.name &&
-      nickname == other.nickname &&
-      phone == other.phone;
 }

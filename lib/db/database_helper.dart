@@ -28,7 +28,6 @@ class DatabaseHelper {
   /// Bump when a hand-written adapter changes shape: the data boxes are
   /// rebuilt once from the cloud instead of being read with a stale layout.
   static const int _schemaVersion = 3;
-  static const String _guestDataKey = 'guestWorkedWithData';
 
   static Future<void> init() async {
     await Hive.initFlutter();
@@ -41,7 +40,6 @@ class DatabaseHelper {
       await Hive.deleteBoxFromDisk(loansBox);
       await Hive.deleteBoxFromDisk(pendingDeletesBox);
       await Hive.deleteBoxFromDisk(docMapBox);
-      await meta.delete(_guestDataKey);
       await meta.put('schemaVersion', _schemaVersion);
     }
 
@@ -68,22 +66,6 @@ class DatabaseHelper {
 
   static Box<String> get docIds => Hive.box<String>(docMapBox);
 
-  static Box<dynamic> get meta => Hive.box<dynamic>(metaBox);
-
-  static bool get hasLocalData =>
-      customers.isNotEmpty || payments.isNotEmpty || loans.isNotEmpty;
-
-  /// True when rows were added while no account was signed in. Only that case
-  /// may be merged with the cloud, because signing out wipes the ledger.
-  static bool get hasGuestData => meta.get(_guestDataKey) == true;
-
-  static Future<void> markGuestData() async {
-    if (hasGuestData) return;
-    await meta.put(_guestDataKey, true);
-  }
-
-  static Future<void> clearGuestData() => meta.delete(_guestDataKey);
-
   /// Signing out leaves nothing on the device, so an account can never merge
   /// with the data of the one that was used before it.
   static Future<void> wipeLocalData() async {
@@ -92,7 +74,6 @@ class DatabaseHelper {
     await loans.clear();
     await pendingDeletes.clear();
     await docIds.clear();
-    await clearGuestData();
   }
 
   static String deleteKey(String boxName, Object localKey) =>

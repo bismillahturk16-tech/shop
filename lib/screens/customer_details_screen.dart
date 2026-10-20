@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:for_shop/db/database_helper.dart';
 import 'package:for_shop/models/customer.dart';
 import 'package:for_shop/models/payment.dart';
 import 'package:for_shop/models/loan.dart';
 import 'package:for_shop/screens/add_loan_screen.dart';
 import 'package:for_shop/screens/loan_details_screen.dart';
-import 'package:hive/hive.dart';
 import 'package:shamsi_date/shamsi_date.dart';
 
 class CustomerDetailsScreen extends StatefulWidget {
@@ -40,8 +40,8 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   }
 
   Future<void> loadTransactions() async {
-    final paymentBox = Hive.box<Payment>('payments');
-    final loanBox = Hive.box<Loan>('loans');
+    final paymentBox = DatabaseHelper.payments;
+    final loanBox = DatabaseHelper.loans;
 
     final customerPayments = paymentBox.values
         .where((payment) => payment.customerKey == widget.customerKey)
@@ -298,7 +298,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
     required double amount,
     String? description,
   }) async {
-    final box = Hive.box<Payment>('payments');
+    final box = DatabaseHelper.payments;
 
     final payment = Payment(
       customerKey: widget.customerKey,

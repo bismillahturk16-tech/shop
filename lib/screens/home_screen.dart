@@ -24,7 +24,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   bool isSearching = false;
   String searchText = '';
-  List<Customer> customers = [];
+  List<_CustomerRow> customers = [];
 
   StreamSubscription<BoxEvent>? _customersSub;
   int _customerRows = 0;
@@ -55,8 +55,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  /// The app itself is laid out left to right, so each Persian dialog brings
-  /// its own direction.
   Widget _rtl(Widget dialog) =>
       Directionality(textDirection: TextDirection.rtl, child: dialog);
 
@@ -69,65 +67,15 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _restoreFromCloud() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        return _rtl(
-          AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-            ),
-            title: const Text('بازیابی از ابر'),
-            content: const Text(
-              'اطلاعات ذخیره‌شده در فایربیس با این گوشی ادغام می‌شود. '
-              'مورد تکراری دوباره اضافه نمی‌شود.',
-              style: TextStyle(fontSize: 15, height: 1.8),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('لغو'),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF513680),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-                child: const Text('بازیابی'),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (confirmed != true) return;
-
-    final message = await SyncService.instance.restoreFromCloud();
-
-    if (!mounted) return;
-
-    _showMessage(message);
-
-    loadCustomers();
-  }
-
   Future<void> _confirmSignOut() async {
     final auth = AuthService.instance;
 
-    // Signing out empties the device, so the upload must happen first and an
-    // offline phone is not allowed to sign out at all.
     final online = await SyncService.instance.refreshOnline();
 
     if (!mounted) return;
 
     if (!online) {
-      _showMessage('برای خروج از حساب به اینترنت وصل شوید.');
+      _showMessage('برای خروج، اتصال به فایربیس باید برقرار باشد.');
 
       return;
     }
@@ -160,7 +108,7 @@ class _HomeScreenState extends State<HomeScreen> {
             content: Text(
               'با خروج از حساب ${auth.account?.email ?? ''} همه اطلاعات این '
               'گوشی پاک می‌شود. نسخه ابری حساب شما دست‌نخورده می‌ماند و با '
-              'بازیابی از ابر برمی‌گردد.',
+              'ورود دوباره برمی‌گردد.',
               style: const TextStyle(fontSize: 15, height: 1.8),
             ),
             actions: [
@@ -187,8 +135,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirmed != true) return;
 
-    // The wipe below is only safe once every row is in Firestore; a row that
-    // failed to upload would be gone with no copy left anywhere.
     final flushError = await SyncService.instance.flushBeforeSignOut();
 
     if (flushError != null) {
@@ -208,17 +154,18 @@ class _HomeScreenState extends State<HomeScreen> {
     if (changed && mounted) _showMessage('رمز عبور شما تغییر کرد.');
   }
 
-  Future<void> deleteCustomer(int index) async {    final deleted = await DeleteCustomerDialog.show(
+  Future<void> deleteCustomer(int index) async {
+    final row = filteredRows[index];
+
+    final deleted = await DeleteCustomerDialog.show(
       context,
-      filteredCustomers[index],
+      row.customer,
+      row.key,
     );
 
     if (deleted && mounted) loadCustomers();
   }
 
-  /// Newest customer first. Rows restored from a cloud that predates
-  /// `createdAt` all carry 0, so they fall back to their Hive key and keep a
-  /// stable order among themselves.
   void loadCustomers() {
     final rows = DatabaseHelper.customers.toMap().entries.toList();
 
@@ -232,18 +179,24 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() {
       _customerRows = rows.length;
-      customers = rows.map((row) => row.value).toList();
+      // The key travels with the customer: two customers with the same name and
+      // phone are separate rows, and the edit has to land on the right one.
+      customers = rows
+          .map((row) => _CustomerRow(row.key as int, row.value))
+          .toList();
     });
   }
 
-  List<Customer> get filteredCustomers {
+  List<_CustomerRow> get filteredRows {
     if (searchText.isEmpty) {
       return customers;
     }
 
     final query = searchText.toLowerCase();
 
-    return customers.where((customer) {
+    return customers.where((row) {
+      final customer = row.customer;
+
       final nameMatch = customer.name.toLowerCase().contains(query);
 
       final nicknameMatch = (customer.nickname ?? '').toLowerCase().contains(
@@ -261,8 +214,6 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     loadCustomers();
 
-    // A restore can land while the list is already on screen, and signing in
-    // now pulls the ledger without asking first.
     _customersSub = DatabaseHelper.customers.watch().listen((_) {
       if (DatabaseHelper.customers.length == _customerRows) return;
 
@@ -289,14 +240,19 @@ class _HomeScreenState extends State<HomeScreen> {
       },
       child: Scaffold(
         backgroundColor: const Color(0xFFF5F7FA),
+        // The chip in the drawer has to tell the truth about the network, so
+        // opening the drawer asks Firestore instead of trusting the interface.
+        onDrawerChanged: (isOpen) {
+          if (isOpen) SyncService.instance.probeCloud();
+        },
         drawer: AppDrawer(
-          onRestore: _restoreFromCloud,
           onChangePassword: _changePassword,
           onSignOut: _confirmSignOut,
         ),
         appBar: AppBar(
           backgroundColor: const Color(0xFF513680),
           centerTitle: true,
+          iconTheme: const IconThemeData(color: Colors.white),
           title: const Text(
             'دفترچه قرضه',
             style: TextStyle(
@@ -371,20 +327,13 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 16),
 
               Expanded(
-                child: filteredCustomers.isEmpty
+                child: filteredRows.isEmpty
                     ? const EmptyCustomerView()
                     : ListView.builder(
-                        itemCount: filteredCustomers.length,
+                        itemCount: filteredRows.length,
                         itemBuilder: (context, index) {
-                          final customer = filteredCustomers[index];
-
-                          final box = Hive.box<Customer>('customers');
-
-                          final originalIndex = box.values.toList().indexOf(
-                            customer,
-                          );
-
-                          final customerKey = box.keyAt(originalIndex);
+                          final row = filteredRows[index];
+                          final customer = row.customer;
 
                           return CustomerCard(
                             onPress: () {
@@ -393,7 +342,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 MaterialPageRoute(
                                   builder: (context) => CustomerDetailsScreen(
                                     customer: customer,
-                                    customerKey: customerKey,
+                                    customerKey: row.key,
                                   ),
                                 ),
                               ).then((_) {
@@ -410,7 +359,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 MaterialPageRoute(
                                   builder: (context) => AddCustomerScreen(
                                     existing: customer,
-                                    customerKey: customerKey,
+                                    customerKey: row.key,
                                   ),
                                 ),
                               ).then((_) {
@@ -450,4 +399,12 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+}
+
+/// A customer together with the Hive key it is stored under.
+class _CustomerRow {
+  const _CustomerRow(this.key, this.customer);
+
+  final int key;
+  final Customer customer;
 }

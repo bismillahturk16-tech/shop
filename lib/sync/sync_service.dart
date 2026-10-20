@@ -17,19 +17,34 @@ class SyncService extends ChangeNotifier {
   static const int _batchLimit = 400;
   static const Duration _debounce = Duration(seconds: 2);
 
+  /// How often the chip re-asks Firestore whether it can be reached. Wi-Fi can
+  /// be connected with no internet behind it, and only a server round trip
+  /// notices that. One document read per check, so the interval stays long.
+  static const Duration _probeInterval = Duration(seconds: 45);
+  static const Duration _probeTimeout = Duration(seconds: 8);
+
   final Connectivity _connectivity = Connectivity();
 
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   StreamSubscription<AuthAccount?>? _authSub;
   final List<StreamSubscription<BoxEvent>> _boxSubs = [];
   Timer? _debounced;
+  Timer? _probeTimer;
+  DateTime? _lastProbe;
 
   bool _online = false;
+
+  /// True only once a Firestore round trip has succeeded. It is what lets the
+  /// drawer say «همگام» instead of merely "nothing is waiting on the phone".
+  bool _cloudVerified = false;
+
   bool _syncing = false;
   int _pendingCount = 0;
   String? _lastError;
 
   bool get isOnline => _online;
+
+  bool get isCloudVerified => _cloudVerified;
 
   bool get isSyncing => _syncing;
 
@@ -40,7 +55,10 @@ class SyncService extends ChangeNotifier {
   String get statusLabel {
     if (_syncing) return 'در حال همگام‌سازی...';
     if (!_online) return 'آفلاین';
-    if (_pendingCount > 0) return '$_pendingCount مورد در انتظار همگام‌سازی';
+    if (!_cloudVerified) return 'در انتظار تایید اتصال به فایربیس';
+    if (_pendingCount > 0) {
+      return '${_fa(_pendingCount)} مورد در انتظار همگام‌سازی';
+    }
     return 'همگام';
   }
 
@@ -49,9 +67,16 @@ class SyncService extends ChangeNotifier {
     await _refreshConnectivity();
 
     _connectivitySub = _connectivity.onConnectivityChanged.listen((results) {
+      final wasOnline = _online;
+
       _online = results.any((result) => result != ConnectivityResult.none);
 
+      // An interface that came back is not a server that came back, so the
+      // previous confirmation no longer holds.
+      if (_online != wasOnline) _cloudVerified = false;
+
       if (_online) {
+        unawaited(probeCloud());
         syncNow();
       }
 
@@ -67,8 +92,12 @@ class SyncService extends ChangeNotifier {
       DatabaseHelper.pendingDeletes.watch().listen((_) => scheduleSync()),
     );
 
-    _trackGuestData();
     _recountPending();
+
+    _probeTimer = Timer.periodic(
+      _probeInterval,
+      (_) => unawaited(probeCloud()),
+    );
 
     _authSub = AuthService.instance.authStateChanges.listen((account) async {
       if (account == null || !AuthService.instance.isCloudReady) return;
@@ -77,7 +106,7 @@ class SyncService extends ChangeNotifier {
       // local row which document belongs to it, and a row that uploads without
       // that binding can land on another row's document. Merging only ever
       // adds, so this also tops up a restore that stopped half way.
-      await restoreFromCloud();
+      await _restoreFromCloud();
 
       syncNow();
     });
@@ -93,34 +122,97 @@ class SyncService extends ChangeNotifier {
     }
     _boxSubs.clear();
     _debounced?.cancel();
+    _probeTimer?.cancel();
+    _probeTimer = null;
     _connectivitySub = null;
     _authSub = null;
   }
 
   void scheduleSync() {
-    _trackGuestData();
     _recountPending();
     notifyListeners();
     _debounced?.cancel();
     _debounced = Timer(_debounce, syncNow);
   }
 
-  /// Rows written while no account is signed in are the only ones a later
-  /// sign-in is allowed to merge with the cloud.
-  void _trackGuestData() {
-    if (AuthService.instance.account != null) return;
-    if (!DatabaseHelper.hasLocalData) return;
-
-    DatabaseHelper.markGuestData();
-  }
-
-  /// Signing out wipes the device, so the logout flow needs to know that the
-  /// unsynced rows can still be uploaded.
+  /// Whether Firestore can be reached right now. The logout flow needs this
+  /// rather than a network interface alone: signing out wipes the device, and
+  /// wiping before the rows are uploaded loses them.
   Future<bool> refreshOnline() async {
     await _refreshConnectivity();
+
+    if (!_online) {
+      _cloudVerified = false;
+      notifyListeners();
+
+      return false;
+    }
+
+    // A device-local account has no cloud to reach, so nothing can fail there.
+    if (!AuthService.instance.isCloudReady) {
+      notifyListeners();
+
+      return true;
+    }
+
+    final verified = await probeCloud();
     notifyListeners();
 
-    return _online;
+    return verified;
+  }
+
+  /// Asks the server itself whether it answers. Connectivity only reports that
+  /// a network interface is up, which stays true on a Wi-Fi with no internet,
+  /// and that is why the chip used to insist on «همگام» while offline.
+  Future<bool> probeCloud() async {
+    _lastProbe = DateTime.now();
+
+    if (!_online || !AuthService.instance.isCloudReady) {
+      _cloudVerified = false;
+      notifyListeners();
+
+      return false;
+    }
+
+    final uid = AuthService.instance.uid!;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('data')
+          .limit(1)
+          .get(const GetOptions(source: Source.server))
+          .timeout(_probeTimeout);
+
+      _cloudVerified = true;
+      _lastError = null;
+    } on FirebaseException catch (e) {
+      _cloudVerified = false;
+      _lastError = e.code;
+    } on Exception {
+      _cloudVerified = false;
+    }
+
+    notifyListeners();
+
+    return _cloudVerified;
+  }
+
+  void _probeCloudThrottled() {
+    final last = _lastProbe;
+
+    if (last != null && DateTime.now().difference(last) < _probeInterval) {
+      return;
+    }
+
+    unawaited(probeCloud());
+  }
+
+  /// The explicit retry: an empty queue needs the server's answer, not a push.
+  Future<void> refresh() async {
+    _lastProbe = null;
+    await syncNow();
   }
 
   /// Pushes everything still on the device and returns a Persian message when
@@ -133,12 +225,26 @@ class SyncService extends ChangeNotifier {
       await _awaitIdle();
       await syncNow();
 
-      if (_pendingCount == 0) return null;
+      if (_pendingCount > 0) continue;
+
+      // A device-local account has no cloud to flush into.
+      if (!AuthService.instance.isCloudReady) return null;
+
+      // The queue is empty either because the rows arrived or because nothing
+      // ever left the phone; only the server can tell those apart.
+      if (await probeCloud()) return null;
     }
 
-    return _lastError != null
-        ? 'ذخیره در فایربیس کامل نشد ($_lastError).'
-        : '${_fa(_pendingCount)} مورد هنوز در فایربیس ذخیره نشده است.';
+    final error = _lastError;
+
+    if (_pendingCount == 0) {
+      return error == null
+          ? 'فایربیس پاسخ نداد، کمی بعد دوباره تلاش کنید.'
+          : 'فایربیس پاسخ نداد ($error).';
+    }
+
+    return '${_fa(_pendingCount)} مورد هنوز در فایربیس ذخیره نشده است'
+        '${error == null ? '.' : ' ($error).'}';
   }
 
   Future<void> _awaitIdle() async {
@@ -154,9 +260,21 @@ class SyncService extends ChangeNotifier {
         ? AuthService.instance.uid
         : null;
 
+    // A row can still be marked synced although nothing in the cloud holds it:
+    // an old build wrote it over another row's document, or its own document
+    // was deleted. Until it goes out again, «همگام» would be a claim the cloud
+    // cannot back up.
+    if (uid != null) await _requeueUnbound();
+
     _recountPending();
 
     if (uid == null || !_online || _syncing || _pendingCount == 0) {
+      // Nothing queued is not the same as everything uploaded: without a
+      // server that answers, the queue can be empty for a row that never left.
+      if (uid != null && _online && !_syncing && !_cloudVerified) {
+        _probeCloudThrottled();
+      }
+
       notifyListeners();
       return;
     }
@@ -178,11 +296,16 @@ class SyncService extends ChangeNotifier {
           await phase(uid);
         } on FirebaseException catch (e) {
           _lastError ??= e.code;
+          _cloudVerified = false;
         } catch (e) {
           _lastError ??= e.toString();
           _online = false;
+          _cloudVerified = false;
         }
       }
+
+      // Committing a batch is itself proof that the server was reached.
+      if (_lastError == null) _cloudVerified = true;
     } finally {
       _syncing = false;
       _recountPending();
@@ -193,7 +316,11 @@ class SyncService extends ChangeNotifier {
   Future<void> _refreshConnectivity() async {
     final results = await _connectivity.checkConnectivity();
 
-    _online = results.any((result) => result != ConnectivityResult.none);
+    final online = results.any((result) => result != ConnectivityResult.none);
+
+    if (online != _online) _cloudVerified = false;
+
+    _online = online;
   }
 
   void _recountPending() {
@@ -255,14 +382,34 @@ class SyncService extends ChangeNotifier {
       final localKey = tombstone.substring(separator + 1);
 
       // A row that never got a binding was uploaded by the build that named
-      // documents after local keys, which is exactly `boxName-localKey`.
+      // documents after local keys, which is exactly `boxName-localKey`. The
+      // guess is only safe while no live row owns that document: keys start
+      // over from zero after a box is cleared, so the number an old tombstone
+      // carries can belong to some other customer by now.
       final docId =
-          DatabaseHelper.docIds.get(tombstone) ?? '$boxName-$localKey';
+          DatabaseHelper.docIds.get(tombstone) ??
+          _legacyDocId(boxName, localKey);
+
+      if (docId == null) {
+        // Its document was never in the cloud, so there is nothing to delete.
+        await DatabaseHelper.pendingDeletes.delete(tombstone);
+
+        continue;
+      }
 
       await _doc(uid, docId).delete();
       await DatabaseHelper.docIds.delete(tombstone);
       await DatabaseHelper.pendingDeletes.delete(tombstone);
     }
+  }
+
+  /// `boxName-localKey`, or null when a live row is already bound to it.
+  static String? _legacyDocId(String boxName, String localKey) {
+    final candidate = '$boxName-$localKey';
+
+    return DatabaseHelper.docIds.values.contains(candidate)
+        ? null
+        : candidate;
   }
 
   Future<void> _pushCustomers(String uid) async {
@@ -588,12 +735,9 @@ class SyncService extends ChangeNotifier {
     return requeued;
   }
 
-  /// Returns a Persian message describing what was restored.
-  Future<String> restoreFromCloud() async {
-    if (!AuthService.instance.isCloudReady) {
-      return 'برای بازیابی باید با حساب خود وارد شوید.';
-    }
-
+  /// Pulls the cloud into Hive. Runs on every sign-in, which is what replaced
+  /// the manual «بازیابی از ابر» entry: signing in already restores.
+  Future<void> _restoreFromCloud() async {
     if (_syncing) await _awaitIdle();
 
     final uid = AuthService.instance.uid!;
@@ -603,53 +747,25 @@ class SyncService extends ChangeNotifier {
     notifyListeners();
 
     try {
+      // From the server, not the local Firestore cache: a restore has to bring
+      // what the cloud holds, and a cache read would succeed while offline.
       final snapshot = await FirebaseFirestore.instance
           .collection('users')
           .doc(uid)
           .collection('data')
-          .get();
+          .get(const GetOptions(source: Source.server));
 
-      final rows = <String, Map<String, dynamic>>{
+      _cloudVerified = true;
+
+      await mergeCloudData({
         for (final doc in snapshot.docs) doc.id: doc.data(),
-      };
-
-      final report = await mergeCloudData(rows);
-
-      final parts = <String>[
-        if (report.customers > 0) '${_fa(report.customers)} مشتری',
-        if (report.loans > 0) '${_fa(report.loans)} قرض',
-        if (report.payments > 0) '${_fa(report.payments)} پرداخت',
-      ];
-
-      if (parts.isEmpty) {
-        // Rows that claimed to be synced while owning no document are back in
-        // the queue, which is not the same as having nothing to do.
-        return report.requeued > 0
-            ? '${_fa(report.requeued)} مورد دوباره به صف ذخیره رفت.'
-            : rows.isEmpty
-            ? 'داده‌ای در کلَود پیدا نشد.'
-            : 'همه داده‌ها از قبل روی این تلفن بود.';
-      }
-
-      var message = 'بازیابی شد: ${parts.join('، ')}.';
-
-      if (report.orphans > 0) {
-        message += ' ${_fa(report.orphans)} مورد مشتری‌شان در کلَود نبود.';
-      }
-
-      if (report.requeued > 0) {
-        message += ' ${_fa(report.requeued)} مورد دوباره به صف ذخیره رفت.';
-      }
-
-      return message;
+      });
     } on FirebaseException catch (e) {
       _lastError = e.code;
-
-      return 'بازیابی انجام نشد (${e.code}).';
+      _cloudVerified = false;
     } catch (e) {
       _lastError = e.toString();
-
-      return 'بازیابی انجام نشد.';
+      _cloudVerified = false;
     } finally {
       _syncing = false;
       _recountPending();
@@ -678,14 +794,11 @@ class _CustomerIndex {
   final _withTime = <String, int>{};
   final _withoutTime = <String, int>{};
 
-  static String _fingerprint(
-    Customer customer, {
-    required bool withTime,
-  }) =>
+  static String _fingerprint(Customer customer, {required bool withTime}) =>
       withTime
-          ? '${customer.name}\u0000${customer.nickname}\u0000'
+      ? '${customer.name}\u0000${customer.nickname}\u0000'
             '${customer.phone}\u0000${customer.createdAt}'
-          : '${customer.name}\u0000${customer.nickname}\u0000${customer.phone}';
+      : '${customer.name}\u0000${customer.nickname}\u0000${customer.phone}';
 
   void add(Customer? customer, int key) {
     if (customer == null) return;

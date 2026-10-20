@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:for_shop/db/database_helper.dart';
 import 'package:for_shop/models/loan.dart';
-import 'package:hive/hive.dart';
 
 class AddLoanScreen extends StatefulWidget {
   final int customerKey;
@@ -104,7 +104,7 @@ class _AddLoanScreenState extends State<AddLoanScreen> {
     });
 
     try {
-      final box = Hive.box<Loan>('loans');
+      final box = DatabaseHelper.loans;
 
       final loan = Loan(
         customerKey: widget.customerKey,
@@ -190,7 +190,7 @@ class _AddLoanScreenState extends State<AddLoanScreen> {
                                 textAlign: TextAlign.right,
                                 textDirection: TextDirection.rtl,
                                 decoration: InputDecoration(
-                                  hintText: 'عنوان ',
+                                  hintText: 'نوت ',
                                   hintTextDirection: TextDirection.rtl,
                                   isDense: true,
                                   filled: true,

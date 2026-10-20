@@ -11,12 +11,10 @@ import 'package:for_shop/sync/sync_service.dart';
 class AppDrawer extends StatelessWidget {
   const AppDrawer({
     super.key,
-    required this.onRestore,
     required this.onChangePassword,
     required this.onSignOut,
   });
 
-  final VoidCallback onRestore;
   final VoidCallback onChangePassword;
   final VoidCallback onSignOut;
 
@@ -28,12 +26,6 @@ class AppDrawer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final account = AuthService.instance.account;
-    final cloudReady = AuthService.instance.isCloudReady;
-
-    // Restoring is idempotent, so the tile stays available even when the
-    // device already holds rows: a pull that stopped half way has to be
-    // repeatable until it brings everything.
-    final canRestore = cloudReady;
 
     return Drawer(
       backgroundColor: const Color(0xFF513680),
@@ -52,13 +44,6 @@ class AppDrawer extends StatelessWidget {
               const SizedBox(height: 16),
               const _TotalBalanceCard(),
               const Spacer(),
-              if (canRestore)
-                _DrawerTile(
-                  icon: Icons.cloud_download_rounded,
-                  title: 'بازیابی از ابر',
-                  subtitle: 'ادغام اطلاعات بدون حساب با داده ابری',
-                  onTap: () => _closeAnd(context, onRestore),
-                ),
               if (account != null)
                 _DrawerTile(
                   icon: Icons.lock_reset_rounded,

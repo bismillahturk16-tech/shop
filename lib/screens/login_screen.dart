@@ -94,38 +94,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 14, color: Color(0xFF667781)),
                   ),
-                  if (!AuthService.instance.isEnabled) ...[
-                    const SizedBox(height: 20),
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFF6E5),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFFF0C36B)),
-                      ),
-                      child: const Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(
-                            Icons.info_outline_rounded,
-                            size: 20,
-                            color: Color(0xFF9A6B12),
-                          ),
-                          SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              '',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Color(0xFF9A6B12),
-                                height: 1.7,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
                   const SizedBox(height: 28),
                   AuthTextField(
                     controller: _emailController,
@@ -241,7 +209,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   TextButton(
                     onPressed: _loading ? null : widget.onContinueOffline,
                     child: const Text(
-                      'ادامه بدون ایجاد حساب ',
+                      'ادامه بدون ایجاد حساب',
                       style: TextStyle(fontSize: 13, color: Color(0xFF667781)),
                     ),
                   ),
