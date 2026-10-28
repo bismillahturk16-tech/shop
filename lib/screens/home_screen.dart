@@ -75,7 +75,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
 
     if (!online) {
-      _showMessage('برای خروج، اتصال به فایربیس باید برقرار باشد.');
+      _showMessage('برای خروج، به انترنت یا وای فای وصل شوید');
 
       return;
     }

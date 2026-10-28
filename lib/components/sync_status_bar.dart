@@ -15,9 +15,6 @@ class SyncStatusBar extends StatelessWidget {
       builder: (context, child) {
         final sync = SyncService.instance;
 
-        // Nothing is confirmed by the phone alone: «همگام» appears only once
-        // Firestore has answered, so a Wi-Fi with no internet behind it shows
-        // as unverified instead of a healthy green.
         final color = !cloudReady
             ? const Color(0xFF667781)
             : sync.isSyncing
@@ -49,7 +46,7 @@ class SyncStatusBar extends StatelessWidget {
             : !cloudReady
             ? 'حساب محلی روی این گوشی'
             : sync.lastError != null
-            ? 'خطا در همگام‌سازی (${sync.lastError})'
+            ? 'خطا در همگام‌سازی'
             : sync.statusLabel;
 
         return Container(

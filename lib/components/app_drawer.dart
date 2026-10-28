@@ -192,13 +192,13 @@ class _TotalBalanceCard extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               _TotalLine(
-                label: 'مجموع قرض',
+                label: 'مجموع قرضه',
                 amount: totalLoan,
                 color: const Color(0xFFFFD54F),
               ),
               const SizedBox(height: 8),
               _TotalLine(
-                label: 'مجموع پرداختی',
+                label: 'مجموع پرداخت',
                 amount: totalPayment,
                 color: const Color(0xFFA5D6A7),
               ),

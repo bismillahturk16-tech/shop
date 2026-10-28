@@ -11,8 +11,6 @@ class StoredAccount {
   final String email;
 }
 
-/// Email/password accounts kept on the device, used until Firebase is
-/// configured. Only a salted SHA-256 hash is stored, never the password.
 class LocalAuthStore {
   LocalAuthStore._(this._box);
 

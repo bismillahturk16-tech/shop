@@ -190,7 +190,7 @@ class _AddLoanScreenState extends State<AddLoanScreen> {
                                 textAlign: TextAlign.right,
                                 textDirection: TextDirection.rtl,
                                 decoration: InputDecoration(
-                                  hintText: 'نوت ',
+                                  hintText: 'یادداشت ',
                                   hintTextDirection: TextDirection.rtl,
                                   isDense: true,
                                   filled: true,
@@ -255,7 +255,7 @@ class _AddLoanScreenState extends State<AddLoanScreen> {
                                 _CellDivider(),
                                 _CellHeader(label: 'قیمت فی واحد', flex: 3),
                                 _CellDivider(),
-                                _CellHeader(label: 'تعداد', flex: 2),
+                                _CellHeader(label: 'تعداد', flex: 1),
                                 _CellDivider(),
                                 _CellHeader(label: 'قیمت مجموعی', flex: 3),
                               ],

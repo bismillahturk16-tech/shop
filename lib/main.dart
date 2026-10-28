@@ -41,7 +41,6 @@ class _ForShopState extends State<ForShop> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  /// Coming back to the foreground retries whatever stayed unsynced.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -67,8 +66,6 @@ class _ForShopState extends State<ForShop> with WidgetsBindingObserver {
   }
 }
 
-/// Hive stays available whether or not the user signs in; the account only
-/// unlocks the cloud backup.
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
 

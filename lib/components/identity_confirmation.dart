@@ -4,9 +4,6 @@ import 'package:local_auth/local_auth.dart';
 
 import 'package:for_shop/services/auth_service.dart';
 
-/// Proof of identity, shared by the flows that change the ledger: deleting a
-/// customer and editing one. Either the account password or the fingerprint the
-/// phone itself holds is accepted, and the password is never stored.
 class IdentityConfirmation extends StatefulWidget {
   const IdentityConfirmation({
     super.key,
@@ -17,10 +14,8 @@ class IdentityConfirmation extends StatefulWidget {
     this.accent = const Color(0xFF513680),
   });
 
-  /// What the confirmation unlocks, e.g. 'حذف' or 'ویرایش'.
   final String action;
 
-  /// The customer the action is about, used in the fingerprint prompt.
   final String name;
 
   final VoidCallback onVerified;
@@ -53,10 +48,6 @@ class IdentityConfirmationState extends State<IdentityConfirmation> {
     super.dispose();
   }
 
-  /// The button is only offered when the phone has a fingerprint enrolled, so
-  /// nobody is sent to a prompt they cannot complete. `getAvailableBiometrics`
-  /// is deliberately not consulted: it reports an empty list on some Samsung
-  /// devices even though the sensor is present and enrolled.
   Future<void> _checkBiometrics() async {
     var ready = false;
 
@@ -84,7 +75,6 @@ class IdentityConfirmationState extends State<IdentityConfirmation> {
     });
   }
 
-  /// Called by the host dialog's confirm button.
   Future<void> confirmWithPassword() async {
     if (_busy) return;
 
@@ -192,10 +182,6 @@ class IdentityConfirmationState extends State<IdentityConfirmation> {
   }
 }
 
-/// The confirmation on its own, for a screen that only needs the proof before
-/// it continues — editing a customer's details. Returns true when the identity
-/// was proven; with no signed-in account there is nothing to prove, so the
-/// caller continues as well.
 class ConfirmIdentityDialog extends StatefulWidget {
   const ConfirmIdentityDialog({
     super.key,

@@ -17,14 +17,9 @@ class AuthAccount {
   final String id;
   final String email;
 
-  /// True when the account lives in Firebase Auth, false for a device-local
-  /// account created while Firebase is not configured yet.
   final bool isRemote;
 }
 
-/// Single auth entry point for the UI. It talks to Firebase Auth when the app
-/// is configured, and to a Hive-backed local account store otherwise, so the
-/// login and signup screens behave the same in both modes.
 class AuthService {
   AuthService._();
 
@@ -42,7 +37,6 @@ class AuthService {
 
   String? get uid => _current?.id;
 
-  /// Cloud sync needs both Firebase and a Firebase-signed account.
   bool get isCloudReady => isEnabled && _current?.isRemote == true;
 
   Stream<AuthAccount?> get authStateChanges async* {
@@ -104,8 +98,6 @@ class AuthService {
     }
 
     if (_app == null && FirebaseConfig.isFilled) {
-      // No google-services.json: initialize from the values in
-      // lib/firebase_config.dart instead.
       try {
         _app = await Firebase.initializeApp(options: FirebaseConfig.android);
       } on Exception {
@@ -224,7 +216,7 @@ class AuthService {
 
     final user = FirebaseAuth.instance.currentUser;
 
-    if (user == null) return 'نشست شما تمام شده است، دوباره وارد شوید.';
+    if (user == null) return ' دوباره وارد شوید';
 
     try {
       await user.reauthenticateWithCredential(
@@ -237,9 +229,6 @@ class AuthService {
     }
   }
 
-  /// Returns null on success, otherwise a Persian message to show the user.
-  /// The account has to prove itself with the old password first, which is
-  /// also what Firebase demands before it accepts a new one.
   Future<String?> changePassword({
     required String currentPassword,
     required String newPassword,

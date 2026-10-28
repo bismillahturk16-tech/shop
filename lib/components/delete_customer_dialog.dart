@@ -6,8 +6,6 @@ import 'package:for_shop/db/database_helper.dart';
 import 'package:for_shop/models/customer.dart';
 import 'package:for_shop/services/auth_service.dart';
 
-/// Deleting a customer is the one irreversible action in the ledger, so the
-/// warning and the proof of identity live in the same dialog.
 class DeleteCustomerDialog extends StatefulWidget {
   const DeleteCustomerDialog({
     super.key,
@@ -17,8 +15,6 @@ class DeleteCustomerDialog extends StatefulWidget {
 
   final Customer customer;
 
-  /// The Hive key of [customer]: rows are not comparable, so the delete has to
-  /// be told which one it is about.
   final Object customerKey;
 
   static Future<bool> show(
@@ -59,9 +55,6 @@ class _DeleteCustomerDialogState extends State<DeleteCustomerDialog> {
     if (mounted) Navigator.pop(context, true);
   }
 
-  /// The dialog promises to remove the customer with its loans and payments,
-  /// and the cloud delete only stays consistent if those rows are tombstoned
-  /// too.
   Future<void> _deleteChildRows<T>(Box<T> box, Object customerKey) async {
     final keys = box
         .toMap()
@@ -84,8 +77,6 @@ class _DeleteCustomerDialogState extends State<DeleteCustomerDialog> {
       textDirection: TextDirection.rtl,
       child: AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        // The keyboard plus the fingerprint button is taller than the dialog
-        // on small screens, so the body has to scroll.
         scrollable: true,
         title: Row(
           children: [
@@ -129,8 +120,6 @@ class _DeleteCustomerDialogState extends State<DeleteCustomerDialog> {
             child: const Text('لغو'),
           ),
           ElevatedButton(
-            // With no account the button deletes straight away, which is what
-            // the guest ledger on an unconfigured phone has always done.
             onPressed: _busy
                 ? null
                 : _needsIdentity

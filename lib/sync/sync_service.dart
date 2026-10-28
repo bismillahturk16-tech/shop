@@ -17,9 +17,6 @@ class SyncService extends ChangeNotifier {
   static const int _batchLimit = 400;
   static const Duration _debounce = Duration(seconds: 2);
 
-  /// How often the chip re-asks Firestore whether it can be reached. Wi-Fi can
-  /// be connected with no internet behind it, and only a server round trip
-  /// notices that. One document read per check, so the interval stays long.
   static const Duration _probeInterval = Duration(seconds: 45);
   static const Duration _probeTimeout = Duration(seconds: 8);
 
@@ -34,8 +31,6 @@ class SyncService extends ChangeNotifier {
 
   bool _online = false;
 
-  /// True only once a Firestore round trip has succeeded. It is what lets the
-  /// drawer say «همگام» instead of merely "nothing is waiting on the phone".
   bool _cloudVerified = false;
 
   bool _syncing = false;
@@ -55,7 +50,7 @@ class SyncService extends ChangeNotifier {
   String get statusLabel {
     if (_syncing) return 'در حال همگام‌سازی...';
     if (!_online) return 'آفلاین';
-    if (!_cloudVerified) return 'در انتظار تایید اتصال به فایربیس';
+    if (!_cloudVerified) return 'در انتظار تایید اتصال به کلود';
     if (_pendingCount > 0) {
       return '${_fa(_pendingCount)} مورد در انتظار همگام‌سازی';
     }
@@ -239,11 +234,11 @@ class SyncService extends ChangeNotifier {
 
     if (_pendingCount == 0) {
       return error == null
-          ? 'فایربیس پاسخ نداد، کمی بعد دوباره تلاش کنید.'
-          : 'فایربیس پاسخ نداد ($error).';
+          ? 'کلود پاسخ نداد، کمی بعد دوباره تلاش کنید.'
+          : 'کلود پاسخ نداد ($error).';
     }
 
-    return '${_fa(_pendingCount)} مورد هنوز در فایربیس ذخیره نشده است'
+    return '${_fa(_pendingCount)} مورد هنوز در ابر ذخیره نشده است'
         '${error == null ? '.' : ' ($error).'}';
   }
 
@@ -259,18 +254,11 @@ class SyncService extends ChangeNotifier {
     final uid = AuthService.instance.isCloudReady
         ? AuthService.instance.uid
         : null;
-
-    // A row can still be marked synced although nothing in the cloud holds it:
-    // an old build wrote it over another row's document, or its own document
-    // was deleted. Until it goes out again, «همگام» would be a claim the cloud
-    // cannot back up.
     if (uid != null) await _requeueUnbound();
 
     _recountPending();
 
     if (uid == null || !_online || _syncing || _pendingCount == 0) {
-      // Nothing queued is not the same as everything uploaded: without a
-      // server that answers, the queue can be empty for a row that never left.
       if (uid != null && _online && !_syncing && !_cloudVerified) {
         _probeCloudThrottled();
       }
@@ -284,8 +272,6 @@ class SyncService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // One phase failing must not strand the others: a loan that is still
-      // waiting keeps `isSynced == false` and goes out on the next round.
       for (final phase in <Future<void> Function(String)>[
         _pushDeletes,
         _pushCustomers,
@@ -407,9 +393,7 @@ class SyncService extends ChangeNotifier {
   static String? _legacyDocId(String boxName, String localKey) {
     final candidate = '$boxName-$localKey';
 
-    return DatabaseHelper.docIds.values.contains(candidate)
-        ? null
-        : candidate;
+    return DatabaseHelper.docIds.values.contains(candidate) ? null : candidate;
   }
 
   Future<void> _pushCustomers(String uid) async {
@@ -735,8 +719,6 @@ class SyncService extends ChangeNotifier {
     return requeued;
   }
 
-  /// Pulls the cloud into Hive. Runs on every sign-in, which is what replaced
-  /// the manual «بازیابی از ابر» entry: signing in already restores.
   Future<void> _restoreFromCloud() async {
     if (_syncing) await _awaitIdle();
 
